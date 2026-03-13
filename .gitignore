@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .ip_location.lock
 .DS_Store
+build/
+dist/
+icon_preview.png

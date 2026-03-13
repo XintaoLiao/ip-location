@@ -40,6 +40,11 @@ from AppKit import (
     NSFontWeightMedium,
     NSFontWeightSemibold,
     NSApp,
+    NSMenu,
+    NSMenuItem,
+    NSImageView,
+    NSImage,
+    NSImageScaleProportionallyUpOrDown,
 )
 from PyObjCTools import AppHelper
 
@@ -68,7 +73,7 @@ REGION_DISPLAY = {
 
 def country_flag(code: str) -> str:
     if not code or len(code) != 2:
-        return "🌐"
+        return ""
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in code.upper())
 
 
@@ -220,21 +225,20 @@ def notify(title, message):
 
 # --- Circular Bubble with Flag-filled Background ---
 class CircleBubbleView(NSView):
-    """Circular clipped view with drag support. Children are clipped to circle."""
+    """Circular clipped view with drag support and right-click menu."""
 
     def initWithFrame_(self, frame):
         self = objc.super(CircleBubbleView, self).initWithFrame_(frame)
         if self is None:
             return None
         self._drag_origin = None
-        # Enable layer for circular mask
+        self._app = None  # will be set by IPLocationApp
         self.setWantsLayer_(True)
         self.layer().setCornerRadius_(frame.size.width / 2.0)
         self.layer().setMasksToBounds_(True)
         return self
 
     def drawRect_(self, rect):
-        # Morandi gradient base (visible behind/around flag)
         color_top = NSColor.colorWithCalibratedRed_green_blue_alpha_(*MORANDI_TOP)
         color_bottom = NSColor.colorWithCalibratedRed_green_blue_alpha_(*MORANDI_BOTTOM)
         gradient = NSGradient.alloc().initWithStartingColor_endingColor_(color_top, color_bottom)
@@ -255,6 +259,59 @@ class CircleBubbleView(NSView):
         new_x = origin.x + (screen_loc.x - self._drag_origin.x)
         new_y = origin.y + (screen_loc.y - self._drag_origin.y)
         win.setFrameOrigin_((new_x, new_y))
+
+    def rightMouseDown_(self, event):
+        if not self._app:
+            return
+        menu = NSMenu.alloc().init()
+
+        ip_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            f"IP: {self._app.current_ip}", None, "")
+        ip_item.setEnabled_(False)
+        menu.addItem_(ip_item)
+
+        country_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            f"Country: {self._app.current_country_name}", None, "")
+        country_item.setEnabled_(False)
+        menu.addItem_(country_item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        refresh_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Refresh Now", "refreshFromMenu:", "")
+        refresh_item.setTarget_(self)
+        menu.addItem_(refresh_item)
+
+        hide_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Hide Bubble", "hideFromMenu:", "")
+        hide_item.setTarget_(self)
+        menu.addItem_(hide_item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit", "quitFromMenu:", "")
+        quit_item.setTarget_(self)
+        menu.addItem_(quit_item)
+
+        NSMenu.popUpContextMenu_withEvent_forView_(menu, event, self)
+
+    @objc.typedSelector(b"v@:@")
+    def refreshFromMenu_(self, sender):
+        if self._app:
+            self._app.refresh_now(None)
+
+    @objc.typedSelector(b"v@:@")
+    def hideFromMenu_(self, sender):
+        if self._app:
+            self._app.bubble_window.orderOut_(None)
+            self._app.bubble_visible = False
+            self._app.bubble_toggle.title = "Show Bubble"
+
+    @objc.typedSelector(b"v@:@")
+    def quitFromMenu_(self, sender):
+        if self._app:
+            self._app.quit_app(None)
 
 
 def _make_label(frame, text, size, color=None, weight=None, alpha=1.0):
@@ -304,13 +361,26 @@ def create_bubble_window():
     content = CircleBubbleView.alloc().initWithFrame_(NSMakeRect(0, 0, size, size))
     window.setContentView_(content)
 
-    # Giant flag emoji filling the circle (oversized so it crops to flag detail)
-    # Offset to center the flag portion within the circular clip
-    flag_size = 150
-    flag_offset = (size - flag_size) / 2
+    # App icon as initial background (before flag loads)
+    icon_path = os.path.join(SCRIPT_DIR, "AppIcon.icns")
+    icon_view = NSImageView.alloc().initWithFrame_(NSMakeRect(0, 0, size, size))
+    icon_view.setImageScaling_(NSImageScaleProportionallyUpOrDown)
+    if os.path.exists(icon_path):
+        icon_img = NSImage.alloc().initWithContentsOfFile_(icon_path)
+        if icon_img:
+            icon_view.setImage_(icon_img)
+    content.addSubview_(icon_view)
+
+    # Giant flag emoji filling the circle, vertically & horizontally centered
+    # Initially empty, will be set when country is detected
+    flag_font_size = 145
+    flag_w = flag_font_size * 1.4
+    flag_h = flag_font_size * 1.3
+    flag_x = (size - flag_w) / 2
+    flag_y = (size - flag_h) / 2 - flag_font_size * 0.05
     flag_label = _make_label(
-        NSMakeRect(flag_offset, flag_offset, flag_size, flag_size),
-        "🌐", 120,
+        NSMakeRect(flag_x, flag_y, flag_w, flag_h),
+        "", flag_font_size,
     )
     content.addSubview_(flag_label)
 
@@ -318,7 +388,7 @@ def create_bubble_window():
     from AppKit import NSBoxCustom, NSBox
     overlay = NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, size, size))
     overlay.setBoxType_(NSBoxCustom)
-    overlay.setFillColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.0, 0.0, 0.35))
+    overlay.setFillColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(0.0, 0.0, 0.0, 0.15))
     overlay.setBorderWidth_(0)
     overlay.setTitlePosition_(0)  # NSNoTitle
     content.addSubview_(overlay)
@@ -342,13 +412,13 @@ def create_bubble_window():
     speed_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.95, 0.95, 0.95)
 
     up_label = _make_label(
-        NSMakeRect(0, 18, size, 16), "↑ --", 10, speed_color, NSFontWeightMedium,
+        NSMakeRect(0, 19, size, 12), "↑ --", 7, speed_color, NSFontWeightMedium,
     )
     up_label.setShadow_(text_shadow)
     content.addSubview_(up_label)
 
     down_label = _make_label(
-        NSMakeRect(0, 6, size, 16), "↓ --", 10, speed_color, NSFontWeightMedium,
+        NSMakeRect(0, 9, size, 12), "↓ --", 7, speed_color, NSFontWeightMedium,
     )
     down_label.setShadow_(text_shadow)
     content.addSubview_(down_label)
@@ -361,7 +431,7 @@ def create_bubble_window():
 # --- Main App ---
 class IPLocationApp(rumps.App):
     def __init__(self):
-        super().__init__("🌐", quit_button=None)
+        super().__init__("IP", quit_button=None)
 
         self.current_ip = ""
         self.current_country_code = ""
@@ -383,6 +453,8 @@ class IPLocationApp(rumps.App):
         # Create bubble
         (self.bubble_window, self.bubble_flag, self.bubble_cc,
          self.bubble_up, self.bubble_down) = create_bubble_window()
+        # Connect app reference for right-click menu
+        self.bubble_window.contentView()._app = self
 
         # Menu items
         self.ip_item = rumps.MenuItem("IP: fetching...")
@@ -660,4 +732,9 @@ if __name__ == "__main__":
     ensure_single_instance()
     import atexit
     atexit.register(cleanup_lock)
+
+    # Hide Dock icon (works both standalone and .app bundle)
+    from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+    NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+
     IPLocationApp().run()
