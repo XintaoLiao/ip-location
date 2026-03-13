@@ -55,39 +55,68 @@ MORANDI_TOP = (0.565, 0.537, 0.522, 0.92)     # warm taupe
 MORANDI_BOTTOM = (0.424, 0.416, 0.435, 0.92)   # dusty mauve
 
 
+# --- Region display names for China & special regions ---
+# HK, MO, TW have their own country codes from APIs.
+# For CN, we further detect region/city to show province-level detail.
+REGION_DISPLAY = {
+    "CN": ("🇨🇳", "CN", "中国大陆"),
+    "HK": ("🇭🇰", "HK", "中国香港"),
+    "MO": ("🇲🇴", "MO", "中国澳门"),
+    "TW": ("🇹🇼", "TW", "中国台湾"),
+}
+
+
 def country_flag(code: str) -> str:
     if not code or len(code) != 2:
         return "🌐"
     return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in code.upper())
 
 
-# --- IP providers ---
+def get_display_info(cc, cn, region="", city=""):
+    """Return (flag, display_code, display_name) with China/HK/MO/TW awareness."""
+    cc = cc.upper()
+    if cc in REGION_DISPLAY:
+        flag, code, name = REGION_DISPLAY[cc]
+        # For CN, append region/city for more detail
+        if cc == "CN" and (region or city):
+            detail = region or city
+            name = f"中国大陆 · {detail}"
+        return flag, code, name
+    return country_flag(cc), cc, cn
+
+
+# --- IP providers --- each returns (ip, cc, cn, region, city)
 def _fetch_ipinfo():
     r = requests.get("https://ipinfo.io/json", timeout=5)
     r.raise_for_status()
     d = r.json()
-    return d.get("ip", "?"), d.get("country", ""), d.get("country", "")
+    return (d.get("ip", "?"), d.get("country", ""),
+            d.get("country", ""), d.get("region", ""), d.get("city", ""))
 
 
 def _fetch_ipapi():
-    r = requests.get("http://ip-api.com/json/?fields=query,countryCode,country", timeout=5)
+    r = requests.get("http://ip-api.com/json/?fields=query,countryCode,country,regionName,city",
+                     timeout=5)
     r.raise_for_status()
     d = r.json()
-    return d.get("query", "?"), d.get("countryCode", ""), d.get("country", "")
+    return (d.get("query", "?"), d.get("countryCode", ""),
+            d.get("country", ""), d.get("regionName", ""), d.get("city", ""))
 
 
 def _fetch_ifconfig():
     r = requests.get("https://ifconfig.co/json", timeout=5)
     r.raise_for_status()
     d = r.json()
-    return d.get("ip", "?"), d.get("country_iso", ""), d.get("country", "")
+    return (d.get("ip", "?"), d.get("country_iso", ""),
+            d.get("country", ""), d.get("region_name", ""), d.get("city", ""))
 
 
 def _fetch_myip():
     r = requests.get("https://api.myip.com", timeout=5)
     r.raise_for_status()
     d = r.json()
-    return d.get("ip", "?"), d.get("cc", ""), d.get("country", "")
+    return (d.get("ip", "?"), d.get("cc", ""),
+            d.get("country", ""), "", "")
 
 
 PROVIDERS = [
@@ -99,12 +128,13 @@ PROVIDERS = [
 
 
 def fetch_ip_location():
+    """Returns (ip, cc, cn, region, city, provider)."""
     errors = []
     for name, fn in PROVIDERS:
         try:
-            ip, cc, cn = fn()
+            ip, cc, cn, region, city = fn()
             if cc:
-                return ip, cc, cn, name
+                return ip, cc, cn, region, city, name
         except Exception as e:
             errors.append(f"{name}: {e}")
     raise RuntimeError("All providers failed:\n" + "\n".join(errors))
@@ -174,8 +204,16 @@ def save_config(config):
 
 
 def notify(title, message):
+    """Send macOS notification via osascript (more reliable than rumps.notification)."""
     try:
-        rumps.notification(title, "", message)
+        # Escape double quotes for AppleScript
+        t = title.replace('"', '\\"')
+        m = message.replace('"', '\\"')
+        subprocess.Popen(
+            ["osascript", "-e",
+             f'display notification "{m}" with title "{t}" sound name "Glass"'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     except Exception:
         pass
 
@@ -353,6 +391,8 @@ class IPLocationApp(rumps.App):
         self.speed_item = rumps.MenuItem("Speed: --")
         self.interval_item = rumps.MenuItem(f"Interval: {self.interval}s")
         self.bubble_toggle = rumps.MenuItem("Hide Bubble", callback=self.toggle_bubble)
+        autostart_title = "✓ Launch at Login" if is_autostart_enabled() else "Launch at Login"
+        self.autostart_item = rumps.MenuItem(autostart_title, callback=self.toggle_autostart)
 
         self.menu = [
             self.ip_item,
@@ -365,6 +405,7 @@ class IPLocationApp(rumps.App):
             rumps.MenuItem("Refresh Now", callback=self.refresh_now),
             None,
             self.bubble_toggle,
+            self.autostart_item,
             None,
             rumps.MenuItem("Quit", callback=self.quit_app),
         ]
@@ -422,7 +463,7 @@ class IPLocationApp(rumps.App):
 
     def _update(self):
         try:
-            ip, cc, cn, provider = fetch_ip_location()
+            ip, cc, cn, region, city, provider = fetch_ip_location()
             old_cc = self.current_country_code
 
             self.current_ip = ip
@@ -430,22 +471,23 @@ class IPLocationApp(rumps.App):
             self.current_country_name = cn
             self.current_provider = provider
 
-            flag = country_flag(cc)
+            flag, display_code, display_name = get_display_info(cc, cn, region, city)
 
             def _apply():
-                self.title = f"{flag} {cc}"
+                self.title = f"{flag} {display_code}"
                 self.ip_item.title = f"IP: {ip}"
-                self.country_item.title = f"Country: {cn} ({cc})"
+                self.country_item.title = f"Country: {display_name} ({display_code})"
                 self.provider_item.title = f"Provider: {provider}"
                 self.bubble_flag.setStringValue_(flag)
-                self.bubble_cc.setStringValue_(cc)
+                self.bubble_cc.setStringValue_(display_code)
 
             run_on_main_thread(_apply)
 
             if old_cc and old_cc != cc:
+                old_flag, old_code, old_name = get_display_info(old_cc, old_cc)
                 notify(
                     "IP Location Changed",
-                    f"{country_flag(old_cc)} {old_cc} → {flag} {cc}\nIP: {ip}",
+                    f"{old_flag} {old_name} → {flag} {display_name}\nIP: {ip}",
                 )
 
             self.error_notified = False
@@ -502,6 +544,16 @@ class IPLocationApp(rumps.App):
             except ValueError:
                 rumps.alert("Invalid input", "Please enter a number.")
 
+    def toggle_autostart(self, sender):
+        if is_autostart_enabled():
+            disable_autostart()
+            sender.title = "Launch at Login"
+            notify("IP Location", "Disabled launch at login")
+        else:
+            enable_autostart()
+            sender.title = "✓ Launch at Login"
+            notify("IP Location", "Enabled launch at login")
+
     def quit_app(self, _):
         self._stop_event.set()
         self._speed_stop.set()
@@ -509,7 +561,60 @@ class IPLocationApp(rumps.App):
         rumps.quit_application()
 
 
-LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ip_location.lock")
+# --- Launch Agent (auto-start) management ---
+PLIST_LABEL = "com.chiyou.ip-location"
+PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{PLIST_LABEL}.plist")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_PYTHON = os.path.join(SCRIPT_DIR, ".venv", "bin", "python3")
+SCRIPT_PATH = os.path.abspath(__file__)
+
+PLIST_TEMPLATE = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{VENV_PYTHON}</string>
+        <string>{SCRIPT_PATH}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{SCRIPT_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/ip-location.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ip-location.err</string>
+</dict>
+</plist>
+"""
+
+
+def is_autostart_enabled():
+    return os.path.exists(PLIST_PATH)
+
+
+def enable_autostart():
+    os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
+    with open(PLIST_PATH, "w") as f:
+        f.write(PLIST_TEMPLATE)
+    subprocess.run(["launchctl", "load", PLIST_PATH], capture_output=True)
+
+
+def disable_autostart():
+    if os.path.exists(PLIST_PATH):
+        subprocess.run(["launchctl", "unload", PLIST_PATH], capture_output=True)
+        os.unlink(PLIST_PATH)
+
+
+LOCK_PATH = os.path.join(SCRIPT_DIR, ".ip_location.lock")
 _lock_file = None
 
 
