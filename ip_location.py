@@ -260,6 +260,13 @@ class CircleBubbleView(NSView):
         new_y = origin.y + (screen_loc.y - self._drag_origin.y)
         win.setFrameOrigin_((new_x, new_y))
 
+    def mouseUp_(self, event):
+        """Save position after drag."""
+        if self._drag_origin is not None:
+            origin = self.window().frame().origin
+            _save_bubble_position(origin.x, origin.y)
+        self._drag_origin = None
+
     def rightMouseDown_(self, event):
         if not self._app:
             return
@@ -287,6 +294,11 @@ class CircleBubbleView(NSView):
         hide_item.setTarget_(self)
         menu.addItem_(hide_item)
 
+        reset_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Reset Position", "resetPositionFromMenu:", "")
+        reset_item.setTarget_(self)
+        menu.addItem_(reset_item)
+
         menu.addItem_(NSMenuItem.separatorItem())
 
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -307,6 +319,14 @@ class CircleBubbleView(NSView):
             self._app.bubble_window.orderOut_(None)
             self._app.bubble_visible = False
             self._app.bubble_toggle.title = "Show Bubble"
+
+    @objc.typedSelector(b"v@:@")
+    def resetPositionFromMenu_(self, sender):
+        if self._app:
+            size = 76
+            x, y = _default_bubble_position(size)
+            self._app.bubble_window.setFrameOrigin_((x, y))
+            _save_bubble_position(x, y)
 
     @objc.typedSelector(b"v@:@")
     def quitFromMenu_(self, sender):
@@ -332,12 +352,42 @@ def _make_label(frame, text, size, color=None, weight=None, alpha=1.0):
     return label
 
 
+def _default_bubble_position(size):
+    """Default position: top-right, below menu bar."""
+    screen = NSScreen.mainScreen().visibleFrame()  # excludes menu bar & dock
+    x = screen.origin.x + screen.size.width - size - 30
+    y = screen.origin.y + screen.size.height - size - 30
+    return x, y
+
+
+def _load_bubble_position(size):
+    """Load saved position or return default. Ensures on-screen."""
+    config = load_config()
+    x = config.get("bubble_x")
+    y = config.get("bubble_y")
+    if x is not None and y is not None:
+        # Verify position is visible on any connected screen
+        for screen in NSScreen.screens():
+            sf = screen.frame()
+            if (sf.origin.x <= x < sf.origin.x + sf.size.width and
+                    sf.origin.y <= y < sf.origin.y + sf.size.height):
+                return x, y
+        # Saved position is off-screen, reset
+    return _default_bubble_position(size)
+
+
+def _save_bubble_position(x, y):
+    """Save bubble position to config."""
+    config = load_config()
+    config["bubble_x"] = round(x, 1)
+    config["bubble_y"] = round(y, 1)
+    save_config(config)
+
+
 def create_bubble_window():
     """Compact circle bubble: flag emoji fills background, info overlaid."""
-    screen = NSScreen.mainScreen().frame()
     size = 76
-    x = screen.size.width - size - 20
-    y = screen.size.height - size - 60
+    x, y = _load_bubble_position(size)
     frame = NSMakeRect(x, y, size, size)
 
     style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel | NSWindowStyleMaskUtilityWindow

@@ -60,12 +60,29 @@ echo "==> Copying Python virtual environment..."
 cp -a "$VENV_DIR" "$APP_BUNDLE/Contents/Resources/.venv"
 
 # --- Create launcher script ---
+# Must use Python.app (GUI-capable) for NSStatusItem to work on macOS
 cat > "$APP_BUNDLE/Contents/MacOS/launcher" << 'LAUNCHER'
 #!/bin/bash
 DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
-source "$DIR/.venv/bin/activate"
+VENV="$DIR/.venv"
 cd "$DIR"
-exec python3 -u "$DIR/ip_location.py"
+
+# Activate venv to get correct python path
+source "$VENV/bin/activate"
+
+# Get site-packages and Python.app path
+SITE_PKGS="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
+PYTHON_FRAMEWORK="$(python3 -c 'import sys, os; print(os.path.dirname(os.path.dirname(sys.base_prefix)))')"
+PYTHON_GUI="$PYTHON_FRAMEWORK/Resources/Python.app/Contents/MacOS/Python"
+
+# Python.app needs explicit PYTHONPATH to find venv packages
+export PYTHONPATH="$SITE_PKGS"
+
+if [ -x "$PYTHON_GUI" ]; then
+    exec "$PYTHON_GUI" -u "$DIR/ip_location.py"
+else
+    exec python3 -u "$DIR/ip_location.py"
+fi
 LAUNCHER
 chmod +x "$APP_BUNDLE/Contents/MacOS/launcher"
 
