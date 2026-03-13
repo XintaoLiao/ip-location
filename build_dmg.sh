@@ -67,22 +67,10 @@ DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 VENV="$DIR/.venv"
 cd "$DIR"
 
-# Activate venv to get correct python path
-source "$VENV/bin/activate"
-
-# Get site-packages and Python.app path
-SITE_PKGS="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
-PYTHON_FRAMEWORK="$(python3 -c 'import sys, os; print(os.path.dirname(os.path.dirname(sys.base_prefix)))')"
-PYTHON_GUI="$PYTHON_FRAMEWORK/Resources/Python.app/Contents/MacOS/Python"
-
-# Python.app needs explicit PYTHONPATH to find venv packages
-export PYTHONPATH="$SITE_PKGS"
-
-if [ -x "$PYTHON_GUI" ]; then
-    exec "$PYTHON_GUI" -u "$DIR/ip_location.py"
-else
-    exec python3 -u "$DIR/ip_location.py"
-fi
+# Use venv's python3 directly — homebrew python auto-reexecs to Python.app (GUI-capable)
+# Do NOT use exec — it breaks LaunchServices' association with the .app bundle,
+# causing NSStatusItem (menu bar icon) to not appear.
+"$VENV/bin/python3" -u "$DIR/ip_location.py"
 LAUNCHER
 chmod +x "$APP_BUNDLE/Contents/MacOS/launcher"
 
