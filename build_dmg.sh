@@ -10,7 +10,7 @@ DMG_NAME="IP-Location"
 DMG_PATH="$SCRIPT_DIR/dist/${DMG_NAME}.dmg"
 
 # Require python.org universal2 Python (not Homebrew single-arch)
-UNIVERSAL_PYTHON="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+UNIVERSAL_PYTHON="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
 if [ ! -x "$UNIVERSAL_PYTHON" ]; then
     echo "Error: Universal Python not found at $UNIVERSAL_PYTHON"
     echo "Install from https://www.python.org/downloads/ (macOS universal2 installer)"
