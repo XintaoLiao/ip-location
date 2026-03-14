@@ -3,11 +3,25 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export MACOSX_DEPLOYMENT_TARGET=12.0
+export ARCHFLAGS="-arch arm64 -arch x86_64"
 APP_NAME="IP Location"
 APP_BUNDLE="$SCRIPT_DIR/dist/${APP_NAME}.app"
 DMG_NAME="IP-Location"
 DMG_PATH="$SCRIPT_DIR/dist/${DMG_NAME}.dmg"
-VENV_DIR="$SCRIPT_DIR/.venv"
+
+# Require python.org universal2 Python (not Homebrew single-arch)
+UNIVERSAL_PYTHON="/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+if [ ! -x "$UNIVERSAL_PYTHON" ]; then
+    echo "Error: Universal Python not found at $UNIVERSAL_PYTHON"
+    echo "Install from https://www.python.org/downloads/ (macOS universal2 installer)"
+    exit 1
+fi
+# Verify it's actually universal
+if ! file "$UNIVERSAL_PYTHON" | grep -q "universal binary"; then
+    echo "Error: $UNIVERSAL_PYTHON is not a universal binary"
+    exit 1
+fi
+echo "==> Using universal Python: $($UNIVERSAL_PYTHON --version)"
 
 echo "==> Cleaning previous build..."
 rm -rf "$SCRIPT_DIR/dist"
@@ -56,12 +70,12 @@ fi
 cp "$SCRIPT_DIR/ip_location.py" "$APP_BUNDLE/Contents/Resources/"
 cp "$SCRIPT_DIR/config.json" "$APP_BUNDLE/Contents/Resources/"
 
-# --- Rebuild venv with macOS 12 deployment target ---
-echo "==> Creating clean venv with MACOSX_DEPLOYMENT_TARGET=12.0..."
+# --- Build universal2 venv ---
+echo "==> Creating universal2 venv (arm64 + x86_64, macOS 12.0+)..."
 BUNDLE_VENV="$APP_BUNDLE/Contents/Resources/.venv"
-python3 -m venv "$BUNDLE_VENV"
-MACOSX_DEPLOYMENT_TARGET=12.0 "$BUNDLE_VENV/bin/pip" install --upgrade pip
-MACOSX_DEPLOYMENT_TARGET=12.0 "$BUNDLE_VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
+"$UNIVERSAL_PYTHON" -m venv "$BUNDLE_VENV"
+"$BUNDLE_VENV/bin/pip" install --upgrade pip
+"$BUNDLE_VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
 
 # --- Create launcher script ---
 # Must use Python.app (GUI-capable) for NSStatusItem to work on macOS
