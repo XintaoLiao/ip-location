@@ -2,6 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export MACOSX_DEPLOYMENT_TARGET=12.0
 APP_NAME="IP Location"
 APP_BUNDLE="$SCRIPT_DIR/dist/${APP_NAME}.app"
 DMG_NAME="IP-Location"
@@ -55,9 +56,12 @@ fi
 cp "$SCRIPT_DIR/ip_location.py" "$APP_BUNDLE/Contents/Resources/"
 cp "$SCRIPT_DIR/config.json" "$APP_BUNDLE/Contents/Resources/"
 
-# --- Copy entire venv ---
-echo "==> Copying Python virtual environment..."
-cp -a "$VENV_DIR" "$APP_BUNDLE/Contents/Resources/.venv"
+# --- Rebuild venv with macOS 12 deployment target ---
+echo "==> Creating clean venv with MACOSX_DEPLOYMENT_TARGET=12.0..."
+BUNDLE_VENV="$APP_BUNDLE/Contents/Resources/.venv"
+python3 -m venv "$BUNDLE_VENV"
+MACOSX_DEPLOYMENT_TARGET=12.0 "$BUNDLE_VENV/bin/pip" install --upgrade pip
+MACOSX_DEPLOYMENT_TARGET=12.0 "$BUNDLE_VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
 
 # --- Create launcher script ---
 # Must use Python.app (GUI-capable) for NSStatusItem to work on macOS
@@ -66,6 +70,14 @@ cat > "$APP_BUNDLE/Contents/MacOS/launcher" << 'LAUNCHER'
 DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 VENV="$DIR/.venv"
 cd "$DIR"
+
+# Check macOS version (require 12.0+)
+macos_ver=$(sw_vers -productVersion)
+major=$(echo "$macos_ver" | cut -d. -f1)
+if [ "$major" -lt 12 ]; then
+    osascript -e "display dialog \"IP Location requires macOS 12.0 or later. Current version: $macos_ver\" buttons {\"OK\"} default button \"OK\" with icon stop with title \"IP Location\""
+    exit 1
+fi
 
 # Use venv's python3 directly — homebrew python auto-reexecs to Python.app (GUI-capable)
 # Do NOT use exec — it breaks LaunchServices' association with the .app bundle,

@@ -8,11 +8,18 @@ with a circular Morandi-style floating bubble + network speed.
 import fcntl
 import json
 import os
+import platform
 import signal
 import subprocess
 import sys
 import threading
 import time
+
+# Check macOS version at import time
+_macos_ver = tuple(int(x) for x in platform.mac_ver()[0].split("."))
+if _macos_ver < (12,):
+    print(f"Error: macOS 12.0+ required, current version: {platform.mac_ver()[0]}")
+    sys.exit(1)
 
 import requests
 import rumps
